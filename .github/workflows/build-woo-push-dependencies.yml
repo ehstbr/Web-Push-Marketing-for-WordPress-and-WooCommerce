@@ -1,6 +1,4 @@
-from pathlib import Path
-
-workflow = """name: Build Woo Push Dependencies
+name: Build Woo Push Dependencies
 on: workflow_dispatch
 
 jobs:
@@ -19,20 +17,20 @@ jobs:
       - name: Create composer.json
         shell: bash
         run: |
-          printf '%s\\n' \\
-            '{' \\
-            '  "require": {' \\
-            '    "php": ">=8.2",' \\
-            '    "minishlink/web-push": "11.0.0",' \\
-            '    "php-http/guzzle7-adapter": "^1.1"' \\
-            '  },' \\
-            '  "config": {' \\
-            '    "allow-plugins": {' \\
-            '      "php-http/discovery": true' \\
-            '    },' \\
-            '    "preferred-install": "dist",' \\
-            '    "sort-packages": true' \\
-            '  }' \\
+          printf '%s\n' \
+            '{' \
+            '  "require": {' \
+            '    "php": ">=8.2",' \
+            '    "minishlink/web-push": "11.0.0",' \
+            '    "php-http/guzzle7-adapter": "^1.1"' \
+            '  },' \
+            '  "config": {' \
+            '    "allow-plugins": {' \
+            '      "php-http/discovery": true' \
+            '    },' \
+            '    "preferred-install": "dist",' \
+            '    "sort-packages": true' \
+            '  }' \
             '}' > composer.json
 
       - name: Install Web Push dependencies
@@ -42,12 +40,12 @@ jobs:
       - name: Test Web Push
         shell: bash
         run: |
-          php -r "require 'vendor/autoload.php'; exit(class_exists('Minishlink\\\\WebPush\\\\WebPush') ? 0 : 1);"
+          php -r "require 'vendor/autoload.php'; exit(class_exists('Minishlink\\WebPush\\WebPush') ? 0 : 1);"
 
       - name: Download Action Scheduler
         shell: bash
         run: |
-          curl -fL --retry 3 -o action-scheduler.zip \\
+          curl -fL --retry 3 -o action-scheduler.zip \
             https://github.com/woocommerce/action-scheduler/archive/refs/tags/4.2.0.zip
 
           mkdir action-scheduler-source
@@ -70,10 +68,10 @@ jobs:
       - name: Remove Action Scheduler development files
         shell: bash
         run: |
-          rm -rf \\
-            build/libraries/action-scheduler/.git \\
-            build/libraries/action-scheduler/.github \\
-            build/libraries/action-scheduler/tests \\
+          rm -rf \
+            build/libraries/action-scheduler/.git \
+            build/libraries/action-scheduler/.github \
+            build/libraries/action-scheduler/tests \
             build/libraries/action-scheduler/node_modules
 
       - name: Validate package
@@ -97,17 +95,3 @@ jobs:
           path: woo-push-libraries.zip
           if-no-files-found: error
           retention-days: 7
-"""
-
-path = Path("/mnt/data/build-woo-push-dependencies-v3.yml")
-path.write_text(workflow, encoding="ascii", newline="\n")
-
-# Basic integrity checks.
-raw = path.read_bytes()
-assert not raw.startswith(b"\xef\xbb\xbf")
-assert b"\r\n" not in raw
-assert raw.splitlines()[1] == b"on: workflow_dispatch"
-
-print(f"Criado: {path}")
-print("Primeiras linhas:")
-print("\n".join(path.read_text(encoding="ascii").splitlines()[:8]))
