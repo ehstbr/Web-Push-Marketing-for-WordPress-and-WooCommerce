@@ -1,0 +1,113 @@
+from pathlib import Path
+
+workflow = """name: Build Woo Push Dependencies
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, json, mbstring, openssl, gmp, bcmath
+          tools: composer:v2
+          coverage: none
+
+      - name: Create composer.json
+        shell: bash
+        run: |
+          printf '%s\\n' \\
+            '{' \\
+            '  "require": {' \\
+            '    "php": ">=8.2",' \\
+            '    "minishlink/web-push": "11.0.0",' \\
+            '    "php-http/guzzle7-adapter": "^1.1"' \\
+            '  },' \\
+            '  "config": {' \\
+            '    "allow-plugins": {' \\
+            '      "php-http/discovery": true' \\
+            '    },' \\
+            '    "preferred-install": "dist",' \\
+            '    "sort-packages": true' \\
+            '  }' \\
+            '}' > composer.json
+
+      - name: Install Web Push dependencies
+        shell: bash
+        run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-progress
+
+      - name: Test Web Push
+        shell: bash
+        run: |
+          php -r "require 'vendor/autoload.php'; exit(class_exists('Minishlink\\\\WebPush\\\\WebPush') ? 0 : 1);"
+
+      - name: Download Action Scheduler
+        shell: bash
+        run: |
+          curl -fL --retry 3 -o action-scheduler.zip \\
+            https://github.com/woocommerce/action-scheduler/archive/refs/tags/4.2.0.zip
+
+          mkdir action-scheduler-source
+          unzip -q action-scheduler.zip -d action-scheduler-source
+
+          AS_SOURCE=$(find action-scheduler-source -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          test -f "$AS_SOURCE/action-scheduler.php"
+
+          mkdir -p build/libraries/action-scheduler
+          cp -a "$AS_SOURCE"/. build/libraries/action-scheduler/
+
+      - name: Prepare Web Push library
+        shell: bash
+        run: |
+          mkdir -p build/libraries/web-push
+          cp -a vendor build/libraries/web-push/vendor
+          cp composer.lock build/libraries/web-push/composer.lock
+          composer show > build/libraries/web-push/DEPENDENCIES.txt
+
+      - name: Remove Action Scheduler development files
+        shell: bash
+        run: |
+          rm -rf \\
+            build/libraries/action-scheduler/.git \\
+            build/libraries/action-scheduler/.github \\
+            build/libraries/action-scheduler/tests \\
+            build/libraries/action-scheduler/node_modules
+
+      - name: Validate package
+        shell: bash
+        run: |
+          test -f build/libraries/action-scheduler/action-scheduler.php
+          test -f build/libraries/web-push/vendor/autoload.php
+
+      - name: Create ZIP
+        shell: bash
+        run: |
+          cd build
+          zip -qr ../woo-push-libraries.zip libraries
+          cd ..
+          unzip -l woo-push-libraries.zip | head -n 80
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: woo-push-libraries
+          path: woo-push-libraries.zip
+          if-no-files-found: error
+          retention-days: 7
+"""
+
+path = Path("/mnt/data/build-woo-push-dependencies-v3.yml")
+path.write_text(workflow, encoding="ascii", newline="\n")
+
+# Basic integrity checks.
+raw = path.read_bytes()
+assert not raw.startswith(b"\xef\xbb\xbf")
+assert b"\r\n" not in raw
+assert raw.splitlines()[1] == b"on: workflow_dispatch"
+
+print(f"Criado: {path}")
+print("Primeiras linhas:")
+print("\n".join(path.read_text(encoding="ascii").splitlines()[:8]))
