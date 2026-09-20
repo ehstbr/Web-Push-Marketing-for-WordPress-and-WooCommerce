@@ -1,0 +1,223 @@
+from pathlib import Path
+
+workflow = r'''name: Build Woo Push Dependencies
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build bundled dependencies
+    runs-on: ubuntu-latest
+
+    env:
+      ACTION_SCHEDULER_VERSION: "4.2.0"
+
+    steps:
+      - name: Setup PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, json, mbstring, openssl, gmp, bcmath
+          tools: composer:v2
+          coverage: none
+
+      - name: Create composer.json
+        shell: bash
+        run: |
+          cat > composer.json <<'JSON'
+          {
+            "require": {
+              "php": ">=8.2",
+              "minishlink/web-push": "11.0.0",
+              "php-http/guzzle7-adapter": "^1.1"
+            },
+            "config": {
+              "allow-plugins": {
+                "php-http/discovery": true
+              },
+              "preferred-install": "dist",
+              "sort-packages": true,
+              "optimize-autoloader": true
+            }
+          }
+          JSON
+
+      - name: Validate composer.json
+        run: composer validate --no-check-publish
+
+      - name: Install Web Push production dependencies
+        run: |
+          composer install \
+            --no-dev \
+            --prefer-dist \
+            --optimize-autoloader \
+            --classmap-authoritative \
+            --no-interaction \
+            --no-progress
+
+      - name: Test Web Push classes
+        shell: bash
+        run: |
+          php <<'PHP'
+          <?php
+
+          require __DIR__ . '/vendor/autoload.php';
+
+          $classes = [
+              'Minishlink\\WebPush\\WebPush',
+              'Minishlink\\WebPush\\Subscription',
+              'GuzzleHttp\\Client',
+              'Http\\Adapter\\Guzzle7\\Client',
+          ];
+
+          foreach ($classes as $class) {
+              if (! class_exists($class)) {
+                  fwrite(STDERR, "Missing class: {$class}\n");
+                  exit(1);
+              }
+
+              echo "OK: {$class}\n";
+          }
+
+          echo "All required Web Push classes loaded successfully.\n";
+          PHP
+
+      - name: Download Action Scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --output action-scheduler.zip \
+            "https://github.com/woocommerce/action-scheduler/archive/refs/tags/${ACTION_SCHEDULER_VERSION}.zip"
+
+          mkdir action-scheduler-source
+          unzip -q action-scheduler.zip -d action-scheduler-source
+
+          AS_SOURCE="$(find action-scheduler-source -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+
+          if [ -z "$AS_SOURCE" ]; then
+            echo "Could not locate extracted Action Scheduler directory."
+            exit 1
+          fi
+
+          if [ ! -f "$AS_SOURCE/action-scheduler.php" ]; then
+            echo "action-scheduler.php was not found."
+            exit 1
+          fi
+
+          echo "Action Scheduler ${ACTION_SCHEDULER_VERSION} downloaded successfully."
+
+      - name: Prepare final libraries structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/libraries/web-push
+          mkdir -p build/libraries/action-scheduler
+
+          # Web Push runtime.
+          cp -a vendor build/libraries/web-push/vendor
+          cp composer.lock build/libraries/web-push/composer.lock
+
+          {
+            echo "Woo Push Marketing - bundled Web Push runtime"
+            echo "Generated: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo
+            echo "Production packages:"
+            composer show --no-dev
+          } > build/libraries/web-push/DEPENDENCIES.txt
+
+          cat > build/libraries/web-push/README.txt <<'TXT'
+          Woo Push Marketing - bundled Web Push dependencies
+
+          Composer is used only by GitHub Actions to resolve and build
+          this runtime. Composer is NOT required on the WordPress server.
+
+          Runtime autoloader:
+              vendor/autoload.php
+          TXT
+
+          # Action Scheduler remains separate and unscoped.
+          AS_SOURCE="$(find action-scheduler-source -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          cp -a "$AS_SOURCE"/. build/libraries/action-scheduler/
+
+          # Remove files that are useful only to upstream development.
+          rm -rf \
+            build/libraries/action-scheduler/.git \
+            build/libraries/action-scheduler/.github \
+            build/libraries/action-scheduler/tests \
+            build/libraries/action-scheduler/node_modules
+
+          rm -f \
+            build/libraries/action-scheduler/.editorconfig \
+            build/libraries/action-scheduler/.gitattributes \
+            build/libraries/action-scheduler/.gitignore \
+            build/libraries/action-scheduler/AGENTS.md \
+            build/libraries/action-scheduler/CLAUDE.md \
+            build/libraries/action-scheduler/codecov.yml \
+            build/libraries/action-scheduler/package.json \
+            build/libraries/action-scheduler/package-lock.json \
+            build/libraries/action-scheduler/phpcs.xml
+
+      - name: Validate Action Scheduler package
+        shell: bash
+        run: |
+          test -f build/libraries/action-scheduler/action-scheduler.php
+          test -f build/libraries/action-scheduler/functions.php
+          test -d build/libraries/action-scheduler/classes
+          echo "Action Scheduler package OK."
+
+      - name: Create package information
+        shell: bash
+        run: |
+          cat > build/README.txt <<TXT
+          Woo Push Marketing - bundled PHP dependencies
+
+          Generated automatically by GitHub Actions.
+
+          Included:
+          - minishlink/web-push 11.0.0 and production dependencies
+          - php-http/guzzle7-adapter
+          - Action Scheduler ${ACTION_SCHEDULER_VERSION}
+
+          Final plugin paths:
+
+          libraries/
+          ├── action-scheduler/
+          │   └── action-scheduler.php
+          └── web-push/
+              └── vendor/
+                  └── autoload.php
+
+          Neither PHP CLI nor Composer is required on the developer's
+          computer to generate this artifact.
+          TXT
+
+      - name: Create ZIP
+        shell: bash
+        run: |
+          cd build
+          zip -r ../woo-push-libraries.zip libraries README.txt
+          cd ..
+
+      - name: Show ZIP contents
+        run: unzip -l woo-push-libraries.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: woo-push-libraries
+          path: woo-push-libraries.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+'''
+
+path = Path('/mnt/data/build-woo-push-dependencies.yml')
+path.write_text(workflow)
+print(path)
